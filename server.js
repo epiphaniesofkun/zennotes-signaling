@@ -3,107 +3,73 @@ const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 4444;
 
-// ============================================================================
-// HTTP Server（回應健康檢查，同時設定 CORS）
-// ============================================================================
 const server = http.createServer((req, res) => {
+  console.log(`[HTTP] ${req.method} ${req.url}`);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', '*');
-  
-  if (req.method === 'OPTIONS') {
-    res.writeHead(204);
-    res.end();
-    return;
-  }
-
+  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  console.log(`[HTTP] ${req.method} ${req.url}`);
   res.end('okay');
 });
 
-// ============================================================================
-// WebSocket Server（Signaling）
-// ============================================================================
-const wss = new WebSocket.Server({ server });
+// 關鍵：用 noServer: true，然後手動處理 upgrade
+const wss = new WebSocket.Server({ noServer: true });
 
-// room -> Set of WebSocket connections
+server.on('upgrade', (request, socket, head) => {
+  console.log('[WS] upgrade 請求收到');
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    wss.emit('connection', ws, request);
+  });
+});
+
 const rooms = new Map();
 
-const getOrCreateRoom = (roomName) => {
-  if (!rooms.has(roomName)) {
-    rooms.set(roomName, new Set());
-  }
-  return rooms.get(roomName);
-};
-
 wss.on('connection', (ws) => {
-console.log('[WS] 新連線！');  // 加這行
+  console.log('[WS] 新連線，目前:', wss.clients.size);
   const subscribedRooms = new Set();
 
   ws.on('message', (rawMessage) => {
     let message;
-    try {
-      message = JSON.parse(rawMessage);
-    } catch (e) {
-      return;
-    }
+    try { message = JSON.parse(rawMessage); } catch (e) { return; }
 
     if (message.type === 'subscribe') {
-      // 加入 room
-      const topics = message.topics || [];
-      topics.forEach((topic) => {
-        const room = getOrCreateRoom(topic);
-        room.add(ws);
+      (message.topics || []).forEach((topic) => {
+        if (!rooms.has(topic)) rooms.set(topic, new Set());
+        rooms.get(topic).add(ws);
         subscribedRooms.add(topic);
+        console.log(`[WS] 加入 room: ${topic}, 人數: ${rooms.get(topic).size}`);
       });
     } else if (message.type === 'unsubscribe') {
-      // 離開 room
-      const topics = message.topics || [];
-      topics.forEach((topic) => {
+      (message.topics || []).forEach((topic) => {
         const room = rooms.get(topic);
-        if (room) {
-          room.delete(ws);
-          if (room.size === 0) rooms.delete(topic);
-        }
+        if (room) { room.delete(ws); if (room.size === 0) rooms.delete(topic); }
         subscribedRooms.delete(topic);
       });
     } else if (message.type === 'publish') {
-      // 廣播給同 room 的其他人
       const topic = message.topic;
       if (!topic) return;
       const room = rooms.get(topic);
       if (!room) return;
-
       const outgoing = JSON.stringify(message);
       room.forEach((peer) => {
-        if (peer !== ws && peer.readyState === WebSocket.OPEN) {
-          peer.send(outgoing);
-        }
+        if (peer !== ws && peer.readyState === WebSocket.OPEN) peer.send(outgoing);
       });
     } else if (message.type === 'ping') {
-      // 回應 pong
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'pong' }));
-      }
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'pong' }));
     }
   });
 
   ws.on('close', () => {
-    // 離開所有 room
+    console.log('[WS] 關閉，目前:', wss.clients.size);
     subscribedRooms.forEach((topic) => {
       const room = rooms.get(topic);
-      if (room) {
-        room.delete(ws);
-        if (room.size === 0) rooms.delete(topic);
-      }
+      if (room) { room.delete(ws); if (room.size === 0) rooms.delete(topic); }
     });
     subscribedRooms.clear();
   });
 
-  ws.on('error', (err) => {
-    console.error('[WS Error]', err.message);
-  });
+  ws.on('error', (err) => console.error('[WS Error]', err.message));
 });
 
 server.listen(PORT, () => {
