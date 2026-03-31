@@ -18,6 +18,7 @@ const server = http.createServer((req, res) => {
   }
 
   res.writeHead(200, { 'Content-Type': 'text/plain' });
+  console.log(`[HTTP] ${req.method} ${req.url}`);
   res.end('okay');
 });
 
