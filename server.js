@@ -38,6 +38,7 @@ const getOrCreateRoom = (roomName) => {
 };
 
 wss.on('connection', (ws) => {
+console.log('[WS] 新連線！');  // 加這行
   const subscribedRooms = new Set();
 
   ws.on('message', (rawMessage) => {
